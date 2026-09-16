@@ -17,6 +17,7 @@ import {
   stubFilePreview,
 } from "./preview";
 import { joinStreamText } from "./streamText";
+import { isKnownAuthRefreshMessage } from "./codexProtocol";
 import { taskListText } from "../taskList";
 import { isReviewablePlan } from "../plan";
 import { resolveModel } from "../models";
@@ -112,7 +113,20 @@ export function applyHarnessEvent(
     case "plan":
       return upsertPlan(session, event);
     case "session.error": {
-      const failed = failStreaming(session);
+      let failed = failStreaming(session);
+      // Codex can stream the known auth failure as assistant text before
+      // reporting it as a completed failure. The error row below already
+      // carries the original first line plus recovery steps, so drop the raw
+      // streamed block instead of showing both.
+      const streamed = [...failed.blocks]
+        .reverse()
+        .find((block) => block.role === "assistant");
+      if (streamed && isKnownAuthRefreshMessage(streamed.text)) {
+        failed = {
+          ...failed,
+          blocks: failed.blocks.filter((block) => block.id !== streamed.id),
+        };
+      }
       // Codex can report the same failure twice for one turn: once as a
       // completed agent message and again as the turn error. Stacking both
       // reads as two separate problems, so keep one row per message. Only

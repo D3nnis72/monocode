@@ -86,17 +86,19 @@ describe("turn duration", () => {
   });
 
   it("keeps one error row for the full streamed auth failure sequence", () => {
-    const recovery = [
-      "Your access token could not be refreshed. Please log out and sign in again.",
-      "",
-      "recovery steps",
-    ].join("\n");
+    const raw =
+      "Your access token could not be refreshed. Please log out and sign in again.";
+    const recovery = [raw, "", "recovery steps"].join("\n");
     let session = appendUser(newSession("codex", "/tmp"), "hi");
     // Streamed agent text lands first, then the rewritten completed message
     // and the turn error each arrive as session.error.
     session = applyHarnessEvent(session, {
       type: "message.delta",
       text: "Your access token could not be refreshed. ",
+    });
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "Please log out and sign in again.",
     });
     session = applyHarnessEvent(session, {
       type: "session.error",
@@ -111,6 +113,11 @@ describe("turn duration", () => {
     );
     expect(errors).toHaveLength(1);
     expect(errors[0]?.text).toBe(recovery);
+    expect(
+      session.blocks.some(
+        (block) => block.role === "assistant" && block.text.includes(raw),
+      ),
+    ).toBe(false);
   });
 
   it("does not collapse an error against a plain status row", () => {

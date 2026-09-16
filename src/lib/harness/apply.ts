@@ -111,13 +111,30 @@ export function applyHarnessEvent(
       return upsertTaskList(session, event);
     case "plan":
       return upsertPlan(session, event);
-    case "session.error":
-      return appendBlock(failStreaming(session), {
+    case "session.error": {
+      const failed = failStreaming(session);
+      // Codex can report the same failure twice for one turn: once as a
+      // completed agent message and again as the turn error. Stacking both
+      // reads as two separate problems, so keep one row per message. Only
+      // collapse against a previous error notice, never against plain status
+      // rows that happen to carry the same text.
+      const last = [...failed.blocks]
+        .reverse()
+        .find((block) => block.role !== "reasoning");
+      if (
+        last?.role === "system" &&
+        last.notice === "error" &&
+        last.text === event.message
+      ) {
+        return failed;
+      }
+      return appendBlock(failed, {
         id: crypto.randomUUID(),
         role: "system",
         text: event.message,
         notice: "error",
       });
+    }
     case "session.providerBound":
       return { ...session, providerSessionId: event.providerSessionId };
     case "session.configChanged":

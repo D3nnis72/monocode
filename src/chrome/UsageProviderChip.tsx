@@ -31,7 +31,7 @@ import {
 } from "./ProviderSignInPanel";
 
 type UsageWindowEntry = {
-  key: "session" | "weekly";
+  key: "session" | "weekly" | "monthly";
   window: RateLimitWindow;
 };
 
@@ -61,7 +61,10 @@ export function UsageProviderChip({
   const [reconnectError, setReconnectError] = useState<string | null>(null);
   const loading =
     limits.status === "idle" ||
-    (limits.status === "fetching" && !limits.session && !limits.weekly);
+    (limits.status === "fetching" &&
+      !limits.session &&
+      !limits.weekly &&
+      !limits.monthly);
   const disconnected = limits.status === "unavailable";
   const windows = usageWindows(limits);
   const loginView = Boolean(
@@ -295,6 +298,9 @@ function usageWindows(limits: ProviderRateLimits): UsageWindowEntry[] {
       ? ({ key: "session", window: limits.session } as const)
       : null,
     limits.weekly ? ({ key: "weekly", window: limits.weekly } as const) : null,
+    limits.monthly
+      ? ({ key: "monthly", window: limits.monthly } as const)
+      : null,
   ].filter((entry): entry is UsageWindowEntry => entry != null);
 }
 
@@ -314,7 +320,9 @@ function UsageWindowCard({
       ? "5-hour limit"
       : kind === "weekly"
         ? "Weekly limit"
-        : `${formatWindowLabel(window.windowMinutes)} limit`;
+        : kind === "monthly"
+          ? "Monthly limit"
+          : `${formatWindowLabel(window.windowMinutes)} limit`;
   return (
     <section className="rounded-lg bg-content/[0.045] px-3 py-2.5 ring-1 ring-inset ring-content/[0.06]">
       <div className="flex items-baseline justify-between gap-3">

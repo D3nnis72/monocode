@@ -27,6 +27,122 @@ pub struct ClaudeUsageFetch {
     pub error: Option<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpencodeGoUsageFetch {
+    pub status: String,
+    pub http_status: Option<u16>,
+    pub body: Option<String>,
+    pub error: Option<String>,
+}
+
+const OPENCODE_GO_USAGE_URL: &str = "https://opencode.ai/zen/go/v1/usage";
+
+/// Fetch OpenCode Go 5h / weekly / monthly usage via the local Go API key.
+/// Runs in the host process so the webview CORS policy does not apply.
+/// The key never leaves the host process.
+#[tauri::command]
+pub async fn fetch_opencode_go_usage() -> Result<OpencodeGoUsageFetch, String> {
+    tauri::async_runtime::spawn_blocking(fetch_opencode_go_usage_sync)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn opencode_go_result(
+    status: &str,
+    http_status: Option<u16>,
+    body: Option<String>,
+    error: Option<String>,
+) -> OpencodeGoUsageFetch {
+    OpencodeGoUsageFetch {
+        status: status.into(),
+        http_status,
+        body,
+        error,
+    }
+}
+
+fn fetch_opencode_go_usage_sync() -> Result<OpencodeGoUsageFetch, String> {
+    let Some(api_key) = read_opencode_go_api_key() else {
+        return Ok(opencode_go_result(
+            "unavailable",
+            None,
+            None,
+            Some("OpenCode Go not connected".into()),
+        ));
+    };
+    let agent = ureq::AgentBuilder::new().timeout(HTTP_TIMEOUT).build();
+    let result = agent
+        .get(OPENCODE_GO_USAGE_URL)
+        .set("Authorization", &format!("Bearer {api_key}"))
+        .call();
+    match result {
+        Ok(response) => {
+            let http_status = response.status();
+            let body = response.into_string().unwrap_or_default();
+            if (200..300).contains(&http_status) {
+                Ok(opencode_go_result(
+                    "ok",
+                    Some(http_status),
+                    Some(body),
+                    None,
+                ))
+            } else {
+                Ok(opencode_go_error(http_status))
+            }
+        }
+        Err(ureq::Error::Status(status, response)) => {
+            let _ = response.into_string();
+            Ok(opencode_go_error(status))
+        }
+        Err(error) => Ok(opencode_go_result(
+            "error",
+            None,
+            None,
+            Some(format!("OpenCode Go usage request failed: {error}")),
+        )),
+    }
+}
+
+fn opencode_go_error(status: u16) -> OpencodeGoUsageFetch {
+    // 403 means a valid key without a Go subscription — not a failure,
+    // so the footer can hide the chip instead of showing an error.
+    if status == 403 {
+        return opencode_go_result(
+            "unavailable",
+            Some(status),
+            None,
+            Some("No OpenCode Go subscription".into()),
+        );
+    }
+    let message = if status == 401 {
+        "OpenCode Go sign-in expired".into()
+    } else {
+        format!("OpenCode Go usage request failed ({status})")
+    };
+    opencode_go_result("error", Some(status), None, Some(message))
+}
+
+/// The Go key lives at `auth.json -> "opencode-go" -> "key"`.
+fn read_opencode_go_api_key() -> Option<String> {
+    let home = dirs_home().or_else(|| {
+        std::env::var_os("USERPROFILE").map(|value| value.to_string_lossy().into_owned())
+    })?;
+    let raw = std::fs::read_to_string(PathBuf::from(home).join(".local/share/opencode/auth.json"))
+        .ok()?;
+    extract_opencode_go_api_key(&raw)
+}
+
+pub(crate) fn extract_opencode_go_api_key(raw: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(raw.trim()).ok()?;
+    let key = value.get("opencode-go")?.get("key")?.as_str()?.trim();
+    if key.is_empty() {
+        None
+    } else {
+        Some(key.to_string())
+    }
+}
+
 struct ClaudeCredentials {
     access_token: String,
     expires_at_ms: Option<i64>,
@@ -327,6 +443,40 @@ mod tests {
             None
         );
         assert_eq!(extract_access_token("not json"), None);
+    }
+
+    #[test]
+    fn extract_opencode_go_api_key_from_auth_json() {
+        let raw = r#"{"openai":{"type":"oauth"},"opencode-go":{"type":"api","key":"sk-go-abc"}}"#;
+        assert_eq!(
+            extract_opencode_go_api_key(raw).as_deref(),
+            Some("sk-go-abc")
+        );
+    }
+
+    #[test]
+    fn opencode_go_forbidden_maps_to_unavailable() {
+        // A valid key without a Go subscription hides the chip
+        // instead of rendering an error.
+        let fetch = opencode_go_error(403);
+        assert_eq!(fetch.status, "unavailable");
+        assert_eq!(fetch.http_status, Some(403));
+
+        let fetch = opencode_go_error(500);
+        assert_eq!(fetch.status, "error");
+    }
+
+    #[test]
+    fn extract_opencode_go_api_key_rejects_missing_or_empty() {
+        assert_eq!(
+            extract_opencode_go_api_key(r#"{"openai":{"type":"oauth"}}"#),
+            None
+        );
+        assert_eq!(
+            extract_opencode_go_api_key(r#"{"opencode-go":{"key":"  "}}"#),
+            None
+        );
+        assert_eq!(extract_opencode_go_api_key("not json"), None);
     }
 
     #[test]

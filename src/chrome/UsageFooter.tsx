@@ -13,6 +13,7 @@ import {
   consumeCodexRateLimitResetCredit,
   fetchClaudeRateLimits,
   fetchCodexRateLimits,
+  fetchOpencodeGoRateLimits,
 } from "../lib/rateLimitsFetch";
 import {
   errorRateLimits,
@@ -67,19 +68,25 @@ export function UsageFooter({
 }) {
   const wantClaude = providers.includes("claude");
   const wantCodex = providers.includes("codex");
+  const wantOpencode = providers.includes("opencode");
   const [claude, setClaude] = useState<ProviderRateLimits>(() =>
     idleRateLimits("claude"),
   );
   const [codex, setCodex] = useState<ProviderRateLimits>(() =>
     idleRateLimits("codex"),
   );
+  const [opencode, setOpencode] = useState<ProviderRateLimits>(() =>
+    idleRateLimits("opencode"),
+  );
   const [now, setNow] = useState(() => Date.now());
   const [refreshing, setRefreshing] = useState(false);
   const inflight = useRef<Promise<void> | null>(null);
   const claudeRef = useRef(claude);
   const codexRef = useRef(codex);
+  const opencodeRef = useRef(opencode);
   claudeRef.current = claude;
   codexRef.current = codex;
+  opencodeRef.current = opencode;
 
   const refresh = useCallback(
     (force = false) => {
@@ -90,7 +97,10 @@ export function UsageFooter({
         shouldFetchProvider(claudeRef.current, { force, visible });
       const fetchCodex =
         wantCodex && shouldFetchProvider(codexRef.current, { force, visible });
-      if (!fetchClaude && !fetchCodex) return;
+      const fetchOpencode =
+        wantOpencode &&
+        shouldFetchProvider(opencodeRef.current, { force, visible });
+      if (!fetchClaude && !fetchCodex && !fetchOpencode) return;
       if (force) setRefreshing(true);
       const jobs: Promise<void>[] = [];
       if (fetchClaude) {
@@ -109,6 +119,14 @@ export function UsageFooter({
           }),
         );
       }
+      if (fetchOpencode) {
+        setOpencode((current) => fetchingRateLimits("opencode", current));
+        jobs.push(
+          fetchOpencodeGoRateLimits().then((value) => {
+            setOpencode(value);
+          }),
+        );
+      }
       const run = Promise.allSettled(jobs)
         .then(() => undefined)
         .finally(() => {
@@ -118,7 +136,7 @@ export function UsageFooter({
       inflight.current = run;
       return run;
     },
-    [wantClaude, wantCodex],
+    [wantClaude, wantCodex, wantOpencode],
   );
 
   useEffect(() => {
@@ -213,7 +231,7 @@ export function UsageFooter({
     [reconnectProvider],
   );
 
-  const showUsage = wantClaude || wantCodex;
+  const showUsage = wantClaude || wantCodex || wantOpencode;
   const showTerminals = terminals.length > 0;
   const showTerminalButton = Boolean(onNewTerminal || onShowTerminal);
   const terminalLabel = projectTerminalActive
@@ -252,6 +270,9 @@ export function UsageFooter({
               onConsumeReset={consumeCodexReset}
               onReconnect={reconnectCodex}
             />
+          ) : null}
+          {wantOpencode && opencode.status !== "unavailable" ? (
+            <UsageProviderChip limits={opencode} now={now} project={project} />
           ) : null}
           <button
             type="button"

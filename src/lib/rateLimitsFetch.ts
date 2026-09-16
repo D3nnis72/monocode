@@ -1,9 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
-import { homeDir } from "./fs";
+import { homeDir, readTextFile } from "./fs";
 import {
   errorRateLimits,
   parseClaudeOAuthUsage,
   parseCodexRateLimits,
+  parseOpencodeGoUsage,
   unavailableRateLimits,
   type ProviderRateLimits,
 } from "./rateLimits";
@@ -20,6 +21,108 @@ import { JsonRpcClient } from "./harness/jsonRpc";
 const USAGE_CHILD_ID = "monocode-codex-usage";
 const DISCOVERY_TIMEOUT_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 12_000;
+
+type OpencodeGoUsageFetch = {
+  status: "ok" | "error" | "unavailable" | string;
+  httpStatus?: number | null;
+  body?: string | null;
+  error?: string | null;
+};
+
+/**
+ * Fetch OpenCode Go 5h / weekly / monthly usage via the official API.
+ * Runs through a Tauri command so the webview CORS policy does not apply.
+ */
+export async function fetchOpencodeGoRateLimits(): Promise<ProviderRateLimits> {
+  let result: OpencodeGoUsageFetch;
+  try {
+    result = await invoke<OpencodeGoUsageFetch>("fetch_opencode_go_usage");
+  } catch (error) {
+    return errorRateLimits(
+      "opencode",
+      error instanceof Error
+        ? error.message
+        : "OpenCode Go usage unavailable",
+    );
+  }
+  if (result.status === "ok" && result.body) {
+    try {
+      const parsed = parseOpencodeGoUsage(JSON.parse(result.body));
+      if (parsed.session || parsed.weekly || parsed.monthly) return parsed;
+    } catch {
+      return errorRateLimits("opencode", "OpenCode Go response was not JSON");
+    }
+    return unavailableRateLimits("opencode", "No OpenCode Go usage data");
+  }
+  if (result.status === "unavailable") {
+    return unavailableRateLimits(
+      "opencode",
+      result.error?.trim() || "OpenCode Go not connected",
+    );
+  }
+  return errorRateLimits(
+    "opencode",
+    result.error?.trim() || "OpenCode Go usage unavailable",
+  );
+}
+
+/** True when an OpenCode Go API key exists on this machine. */
+export async function hasOpencodeGoKey(): Promise<boolean> {
+  try {
+    return (await readOpencodeGoApiKey()) != null;
+  } catch {
+    return false;
+  }
+}
+
+async function readOpencodeGoApiKey(): Promise<string | null> {
+  const home = await homeDir();
+  const candidates = [
+    `${home}/.local/share/opencode/auth.json`,
+    `${home}/Library/Application Support/opencode/auth.json`,
+  ];
+  for (const path of candidates) {
+    try {
+      const key = extractOpencodeGoApiKey(await readTextFile(path));
+      if (key) return key;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+export function extractOpencodeGoApiKey(raw: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const rec = asRecord(parsed);
+  if (!rec) return null;
+  const direct =
+    (typeof rec.opencodeGoApiKey === "string" && rec.opencodeGoApiKey) ||
+    (typeof rec.apiKey === "string" && rec.apiKey) ||
+    "";
+  if (direct.trim()) return direct.trim();
+  // auth.json stores providers under nested keys; the Go key lives at
+  // "opencode-go".key. Scan one level deep as a fallback.
+  const goEntry = asRecord(rec["opencode-go"]);
+  const goKey = goEntry?.key;
+  if (typeof goKey === "string" && goKey.trim()) return goKey.trim();
+  for (const value of Object.values(rec)) {
+    const nested = asRecord(value);
+    if (!nested) continue;
+    for (const key of ["apiKey", "token", "key"]) {
+      const candidate = nested[key];
+      if (typeof candidate === "string" && candidate.trim()) {
+        return candidate.trim();
+      }
+    }
+  }
+  return null;
+}
 
 export type CodexRateLimitResetOutcome =
   "reset" | "nothingToReset" | "noCredit" | "alreadyRedeemed";

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { homeDir, readTextFile } from "./fs";
+import { homeDir } from "./fs";
 import {
   errorRateLimits,
   parseClaudeOAuthUsage,
@@ -64,64 +64,6 @@ export async function fetchOpencodeGoRateLimits(): Promise<ProviderRateLimits> {
     "opencode",
     result.error?.trim() || "OpenCode Go usage unavailable",
   );
-}
-
-/** True when an OpenCode Go API key exists on this machine. */
-export async function hasOpencodeGoKey(): Promise<boolean> {
-  try {
-    return (await readOpencodeGoApiKey()) != null;
-  } catch {
-    return false;
-  }
-}
-
-async function readOpencodeGoApiKey(): Promise<string | null> {
-  const home = await homeDir();
-  const candidates = [
-    `${home}/.local/share/opencode/auth.json`,
-    `${home}/Library/Application Support/opencode/auth.json`,
-  ];
-  for (const path of candidates) {
-    try {
-      const key = extractOpencodeGoApiKey(await readTextFile(path));
-      if (key) return key;
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
-export function extractOpencodeGoApiKey(raw: string): string | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  const rec = asRecord(parsed);
-  if (!rec) return null;
-  const direct =
-    (typeof rec.opencodeGoApiKey === "string" && rec.opencodeGoApiKey) ||
-    (typeof rec.apiKey === "string" && rec.apiKey) ||
-    "";
-  if (direct.trim()) return direct.trim();
-  // auth.json stores providers under nested keys; the Go key lives at
-  // "opencode-go".key. Scan one level deep as a fallback.
-  const goEntry = asRecord(rec["opencode-go"]);
-  const goKey = goEntry?.key;
-  if (typeof goKey === "string" && goKey.trim()) return goKey.trim();
-  for (const value of Object.values(rec)) {
-    const nested = asRecord(value);
-    if (!nested) continue;
-    for (const key of ["apiKey", "token", "key"]) {
-      const candidate = nested[key];
-      if (typeof candidate === "string" && candidate.trim()) {
-        return candidate.trim();
-      }
-    }
-  }
-  return null;
 }
 
 export type CodexRateLimitResetOutcome =

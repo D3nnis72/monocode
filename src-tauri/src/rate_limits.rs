@@ -192,7 +192,7 @@ fn read_opencode_go_api_key() -> Option<String> {
 /// for unrelated providers are never picked up.
 fn read_opencode_config_api_key() -> Option<String> {
     if let Some(content) = env_var("OPENCODE_CONFIG_CONTENT") {
-        if let Ok(value) = serde_json::from_str::<Value>(&content) {
+        if let Some(value) = parse_opencode_config(&content) {
             if let Some(key) = config_go_api_key(&value) {
                 return Some(key);
             }
@@ -201,7 +201,7 @@ fn read_opencode_config_api_key() -> Option<String> {
     opencode_config_paths()
         .iter()
         .filter_map(|path| std::fs::read_to_string(path).ok())
-        .filter_map(|raw| serde_json::from_str::<Value>(raw.trim()).ok())
+        .filter_map(|raw| parse_opencode_config(&raw))
         .find_map(|value| config_go_api_key(&value))
 }
 
@@ -211,14 +211,119 @@ fn opencode_config_paths() -> Vec<PathBuf> {
         paths.push(PathBuf::from(custom));
     }
     if let Some(xdg) = env_var("XDG_CONFIG_HOME") {
-        paths.push(PathBuf::from(xdg).join("opencode/opencode.json"));
+        let root = PathBuf::from(xdg).join("opencode");
+        paths.push(root.join("opencode.jsonc"));
+        paths.push(root.join("opencode.json"));
     }
     if let Some(home) = dirs_home().or_else(|| {
         std::env::var_os("USERPROFILE").map(|value| value.to_string_lossy().into_owned())
     }) {
-        paths.push(PathBuf::from(home).join(".config/opencode/opencode.json"));
+        let root = PathBuf::from(home).join(".config/opencode");
+        paths.push(root.join("opencode.jsonc"));
+        paths.push(root.join("opencode.json"));
     }
     paths
+}
+
+/// Parse OpenCode configuration using JSONC semantics: comments and trailing
+/// commas are accepted, while ordinary JSON stays on serde_json's fast path.
+fn parse_opencode_config(raw: &str) -> Option<Value> {
+    serde_json::from_str(raw.trim()).ok().or_else(|| {
+        let without_comments = strip_jsonc_comments(raw)?;
+        let normalized = strip_jsonc_trailing_commas(&without_comments);
+        serde_json::from_str(&normalized).ok()
+    })
+}
+
+fn strip_jsonc_comments(raw: &str) -> Option<String> {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+
+    while let Some(ch) = chars.next() {
+        if in_string {
+            out.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match (ch, chars.peek().copied()) {
+            ('"', _) => {
+                in_string = true;
+                out.push(ch);
+            }
+            ('/', Some('/')) => {
+                let _ = chars.next();
+                out.push(' ');
+                for next in chars.by_ref() {
+                    if next == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                }
+            }
+            ('/', Some('*')) => {
+                let _ = chars.next();
+                out.push(' ');
+                let mut closed = false;
+                while let Some(next) = chars.next() {
+                    if next == '\n' {
+                        out.push('\n');
+                    }
+                    if next == '*' && chars.next_if_eq(&'/').is_some() {
+                        closed = true;
+                        break;
+                    }
+                }
+                if !closed {
+                    return None;
+                }
+            }
+            _ => out.push(ch),
+        }
+    }
+    Some(out)
+}
+
+fn strip_jsonc_trailing_commas(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+
+    while let Some(ch) = chars.next() {
+        if in_string {
+            out.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => {
+                in_string = true;
+                out.push(ch);
+            }
+            ',' if matches!(
+                chars.clone().find(|next| !next.is_whitespace()),
+                Some('}' | ']')
+            ) => {}
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 fn config_go_api_key(value: &Value) -> Option<String> {
@@ -608,6 +713,26 @@ mod tests {
         std::env::set_var("OPENCODE_DATA_DIR", "/tmp/custom-data");
         assert_eq!(opencode_data_dir(), Some(PathBuf::from("/tmp/custom-data")));
         std::env::remove_var("OPENCODE_DATA_DIR");
+    }
+
+    #[test]
+    fn parse_opencode_config_accepts_jsonc() {
+        let value = parse_opencode_config(
+            r#"{
+              // URLs inside strings must not be treated as comments.
+              "provider": {
+                /* OpenCode Go credentials */
+                "opencode-go": {
+                  "options": {
+                    "apiKey": "sk-go-jsonc",
+                    "baseURL": "https://opencode.ai/v1",
+                  },
+                },
+              },
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(config_go_api_key(&value).as_deref(), Some("sk-go-jsonc"));
     }
 
     #[test]

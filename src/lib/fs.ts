@@ -70,6 +70,7 @@ export type DiscoveredSkill = {
     | "omp"
     | "fx"
     | "grok"
+    | "hermes"
     | "monocode";
 };
 
@@ -373,6 +374,13 @@ export function copyPath(from: string, destParent: string): Promise<string> {
 
 export function movePath(from: string, destParent: string): Promise<string> {
   return invoke<string>("move_path", { from, destParent }).then(slash);
+}
+
+/** macOS only. Other platforms return an empty list. */
+export function clipboardFilePaths(): Promise<string[]> {
+  return invoke<string[]>("clipboard_file_paths").then((paths) =>
+    paths.map(slash),
+  );
 }
 
 export function revealPath(path: string): Promise<void> {

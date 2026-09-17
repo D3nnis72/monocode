@@ -16,6 +16,7 @@ mod macos;
 mod menu;
 mod notes;
 mod notifications;
+mod pasteboard;
 mod project_logo;
 mod pty;
 mod rate_limits;
@@ -229,6 +230,7 @@ pub fn run() {
             control::control_save,
             control::control_load,
             control::control_scopes,
+            control::control_write_path,
             control::control_attach_worker,
             control::control_authorize_turn,
             control::control_turn_finished,
@@ -307,6 +309,7 @@ pub fn run() {
             fs::copy_path,
             fs::move_path,
             fs::reveal_path,
+            pasteboard::clipboard_file_paths,
             fs::clone_repo,
             fs::read_file_preview,
             fs::stat_files,
@@ -330,6 +333,7 @@ pub fn run() {
             harness::harness_resolve_pi,
             harness::harness_resolve_fx,
             harness::harness_resolve_grok,
+            harness::harness_resolve_hermes,
             harness::harness_free_port,
             harness::harness_spawn,
             harness::harness_write,

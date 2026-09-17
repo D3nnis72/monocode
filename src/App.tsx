@@ -4,7 +4,9 @@ import { modelsFor } from "./lib/models";
 import { isHarnessAvailable } from "./lib/harness/availability";
 import {
   completeOrchestrationProposal,
+  completeOrRepairOrchestrationProposal,
   orchestrationPlanningPrompt,
+  orchestrationRepairPrompt,
   proposalBlock,
   validateOrchestrationSettings,
   withOrchestrationProposal,
@@ -261,6 +263,11 @@ import {
   focusedWorkspaceTabCwd,
 } from "./lib/workspaceTabGroups";
 import { runSessionRemoval } from "./lib/sessionRemoval";
+import {
+  DEFAULT_PROVIDER_ACCOUNT_ID,
+  selectedProviderAccountId,
+} from "./lib/providerAccounts";
+import type { RateLimitProvider } from "./lib/rateLimits";
 import {
   HARNESSES,
   HARNESS_LABEL,
@@ -538,7 +545,9 @@ function withHarnessChoice(
     ...(session.model === model
       ? {}
       : { context: dropContextWindow(session.context) }),
-    ...(session.harness === harness ? {} : { providerSessionId: undefined }),
+    ...(session.harness === harness
+      ? {}
+      : { providerSessionId: undefined, providerAccountId: undefined }),
   };
 }
 
@@ -566,6 +575,9 @@ function withPlanBuildTarget(
       ...(plan.restoreProviderSessionId
         ? { providerSessionId: plan.restoreProviderSessionId }
         : { providerSessionId: undefined }),
+      ...(plan.restoreProviderAccountId
+        ? { providerAccountId: plan.restoreProviderAccountId }
+        : { providerAccountId: undefined }),
     };
   }
   if (plan.kind === "empty") {
@@ -1140,8 +1152,13 @@ export default function App({
       id: active.id,
       harness: active.harness,
       authRequired: latestTurnNeedsHarnessLogin(active.blocks),
+      providerAccountId:
+        active.providerAccountId ??
+        (active.blocks.some((block) => block.role === "user")
+          ? DEFAULT_PROVIDER_ACCOUNT_ID
+          : undefined),
     };
-  }, [active?.id, active?.harness, active?.blocks]);
+  }, [active?.id, active?.harness, active?.blocks, active?.providerAccountId]);
   const activeProviderSignInRequest = useMemo(() => {
     if (
       !active ||
@@ -1674,6 +1691,44 @@ export default function App({
       );
     },
     [projectOfTab],
+  );
+
+  const onSelectProviderAccount = useCallback(
+    (provider: RateLimitProvider, accountId: string) => {
+      if (!active || active.harness !== provider) return;
+      const currentId = active.providerAccountId ?? DEFAULT_PROVIDER_ACCOUNT_ID;
+      if (currentId === accountId) return;
+
+      if (active.blocks.length === 0 && !active.busy) {
+        setSessions((current) =>
+          current.map((session) =>
+            session.id === active.id
+              ? { ...session, providerAccountId: accountId }
+              : session,
+          ),
+        );
+        return;
+      }
+
+      // Provider thread ids are account-owned. Keep the current conversation
+      // pinned to its account and open a clean one for the selected profile.
+      const session = {
+        ...newSession(
+          active.harness,
+          active.cwd,
+          active.model,
+          active.runtimeMode,
+          active.modelSettings,
+        ),
+        providerAccountId: accountId,
+      };
+      const tab = newTab(session.id);
+      setSessions((current) => [...current, session]);
+      appendTab(tab, active.cwd);
+      setActiveTabId(tab.id);
+      setComposerFocused(true);
+    },
+    [active, appendTab],
   );
 
   const onOpenWhatsNew = useCallback((version: string) => {
@@ -3167,6 +3222,7 @@ export default function App({
           restored.id,
           restored.providerSessionId,
           sessionWorkCwd(restored),
+          restored.providerAccountId,
         );
       }
       lastPersisted.current.set(restored.id, persistFingerprint(restored));
@@ -4440,6 +4496,9 @@ export default function App({
               ...(plan.restoreProviderSessionId
                 ? { providerSessionId: plan.restoreProviderSessionId }
                 : { providerSessionId: undefined }),
+              ...(plan.restoreProviderAccountId
+                ? { providerAccountId: plan.restoreProviderAccountId }
+                : { providerAccountId: undefined }),
             };
           }
           if (plan.kind === "empty") {
@@ -4486,6 +4545,7 @@ export default function App({
         planBlockId?: string;
         buildTarget?: PlanBuildTarget;
         managed?: boolean;
+        orchestrationRetry?: OrchestrationProposal;
         onSettled?: (outcome: ControlOutcome) => void;
       },
     ) => {
@@ -4569,6 +4629,11 @@ export default function App({
       if (isPreparingHandoff(current)) return false;
       saveRecentModelChoice(current.harness, current.model);
       const workCwd = sessionWorkCwd(current);
+      const providerAccountId =
+        current.harness === "claude" || current.harness === "codex"
+          ? (current.providerAccountId ??
+            selectedProviderAccountId(current.harness, current.cwd))
+          : undefined;
       const submittedText = intent === "build" ? "Build approved plan" : text;
       const rawCommand = isNativeCommandPrompt(submittedText, current.harness);
       const harnessText = rawCommand
@@ -4748,6 +4813,7 @@ export default function App({
           const titled = isFirstTurn ? titleSeed : selected.title;
           let next: Session = {
             ...selected,
+            providerAccountId,
             inboxCard: rawCommand ? s.inboxCard : undefined,
             noteCard: rawCommand ? s.noteCard : undefined,
             handoffCard: rawCommand ? s.handoffCard : undefined,
@@ -4825,6 +4891,7 @@ export default function App({
           sessionId,
           cwd: workCwd,
           message: titleMessage,
+          providerAccountId,
         })
           .then(async (generated) => {
             const linkedWorkItem = await resolveLinkedWorkItem(
@@ -4890,6 +4957,7 @@ export default function App({
       let controlText = "";
       let proposalText = "";
       let nativeProposalText = "";
+      let completedProposal: OrchestrationProposal | undefined;
       void (async () => {
         if (proposalDraft && proposalId) {
           const settings = await discoverOrchestrationSettings();
@@ -4924,6 +4992,7 @@ export default function App({
                 cwd: workCwd,
                 model: pendingSwitch.fromModel,
                 modelSettings: pendingSwitch.fromSettings,
+                providerAccountId: pendingSwitch.fromProviderAccountId,
                 userRequest: text,
               });
             } catch {
@@ -4998,29 +5067,63 @@ export default function App({
                   cwd: workCwd,
                 });
           const turnPrompt = proposalDraft
-            ? orchestrationPlanningPrompt(
-                prompt,
-                proposalDraft.settings,
-                proposalDraft.cwd,
-              )
+            ? options?.orchestrationRetry?.response
+              ? orchestrationRepairPrompt({
+                  ...proposalDraft,
+                  error: options.orchestrationRetry.error,
+                  response: options.orchestrationRetry.response,
+                })
+              : orchestrationPlanningPrompt(
+                  prompt,
+                  proposalDraft.settings,
+                  proposalDraft.cwd,
+                )
             : intent === "plan" && !rawCommand
               ? planTurnPrompt(prompt)
               : prompt;
           const earlier = queuedHandoff
             ? userMessagesAfterHandoff(current)
             : [];
-          await sendHarnessTurn({
-            harness: current.harness,
-            sessionId,
-            cwd: workCwd,
-            model: current.model,
-            modelSettings: current.modelSettings,
-            runtimeMode: current.runtimeMode,
-            intent: intent === "orchestrate" ? "plan" : intent,
-            // A lead drives the control CLI over loopback; without this the
-            // harness sandbox denies the socket and it cannot supervise.
-            controlsAgents: orchestrator.run(sessionId)?.status === "active",
-            text: orchestrator.prompt(
+          const sendTurn = (text: string, turnAttachments = prepared) =>
+            sendHarnessTurn({
+              harness: current.harness,
+              sessionId,
+              cwd: workCwd,
+              model: current.model,
+              modelSettings: current.modelSettings,
+              providerAccountId,
+              runtimeMode: current.runtimeMode,
+              intent: intent === "orchestrate" ? "plan" : intent,
+              // A lead drives the control CLI over loopback; without this the
+              // harness sandbox denies the socket and it cannot supervise.
+              controlsAgents: orchestrator.run(sessionId)?.status === "active",
+              text,
+              attachments: turnAttachments,
+              onEvent: (event) => {
+                if (turnGen.current.get(sessionId) !== gen) return;
+                orchestrator.observe(sessionId, event);
+                if (options?.onSettled && event.type === "message.delta")
+                  controlText = (controlText + event.text).slice(-20_000);
+                if (options?.onSettled && event.type === "message.completed")
+                  controlText += "\n";
+                if (event.type === "session.error")
+                  controlOutcome.error = event.message;
+                if (
+                  wrap &&
+                  (event.type === "session.started" ||
+                    event.type === "session.providerBound")
+                ) {
+                  revealHandoff(wrap.text);
+                }
+                nudgeOpenEditors(event, workCwd);
+                if (!orchestrator.forSession(sessionId))
+                  trackSessionEdits(sessionId, workCwd, event);
+                const routed = routePlanEvent(event);
+                if (routed) enqueueHarnessEvent(sessionId, routed);
+              },
+            });
+          await sendTurn(
+            orchestrator.prompt(
               sessionId,
               inboxAskPrompt(
                 rawCommand ? undefined : current.inboxAsk,
@@ -5034,30 +5137,27 @@ export default function App({
                   : turnPrompt,
               ),
             ),
-            attachments: prepared,
-            onEvent: (event) => {
-              if (turnGen.current.get(sessionId) !== gen) return;
-              orchestrator.observe(sessionId, event);
-              if (options?.onSettled && event.type === "message.delta")
-                controlText = (controlText + event.text).slice(-20_000);
-              if (options?.onSettled && event.type === "message.completed")
-                controlText += "\n";
-              if (event.type === "session.error")
-                controlOutcome.error = event.message;
-              if (
-                wrap &&
-                (event.type === "session.started" ||
-                  event.type === "session.providerBound")
-              ) {
-                revealHandoff(wrap.text);
-              }
-              nudgeOpenEditors(event, workCwd);
-              if (!orchestrator.forSession(sessionId))
-                trackSessionEdits(sessionId, workCwd, event);
-              const routed = routePlanEvent(event);
-              if (routed) enqueueHarnessEvent(sessionId, routed);
-            },
-          });
+          );
+          if (proposalDraft && !providerFailureSeen) {
+            completedProposal = await completeOrRepairOrchestrationProposal(
+              proposalDraft,
+              nativeProposalText || proposalText,
+              async (repairPrompt) => {
+                proposalText = "";
+                nativeProposalText = "";
+                await sendTurn(repairPrompt, []);
+                if (providerFailureSeen)
+                  throw new Error(
+                    controlOutcome.error ??
+                      "The lead could not repair the proposal.",
+                  );
+                return nativeProposalText || proposalText;
+              },
+              () =>
+                turnGen.current.get(sessionId) === gen &&
+                !isProviderFailureText(nativeProposalText || proposalText),
+            );
+          }
           if (turnGen.current.get(sessionId) !== gen) return;
           if (wrap) {
             setSessions((prev) =>
@@ -5121,14 +5221,16 @@ export default function App({
                   ? withOrchestrationProposal(
                       stopped,
                       proposalId,
-                      completeOrchestrationProposal(
-                        proposalDraft,
-                        nativeProposalText || proposalText,
-                        providerFailed || !buildSucceeded
-                          ? (controlOutcome.error ??
-                              "The lead could not finish planning.")
-                          : undefined,
-                      ),
+                      completedProposal && !providerFailed && buildSucceeded
+                        ? completedProposal
+                        : completeOrchestrationProposal(
+                            proposalDraft,
+                            nativeProposalText || proposalText,
+                            providerFailed || !buildSucceeded
+                              ? (controlOutcome.error ??
+                                  "The lead could not finish planning.")
+                              : undefined,
+                          ),
                     )
                   : intent === "plan" && !nativePlanSeen && !providerFailed
                     ? promoteLastAssistantToPlan(stopped, planEventKey)
@@ -5615,6 +5717,11 @@ export default function App({
             cwd: workCwd,
             model: current.model,
             modelSettings: current.modelSettings,
+            providerAccountId:
+              current.harness === "claude" || current.harness === "codex"
+                ? (current.providerAccountId ??
+                  selectedProviderAccountId(current.harness, current.cwd))
+                : undefined,
             runtimeMode: current.runtimeMode,
             onEvent: (event) => {
               if (turnGen.current.get(sessionId) !== gen) return;
@@ -5803,7 +5910,7 @@ export default function App({
           models: modelsFor(harness).map(({ id, name }) => ({ id, name })),
         })),
       createWorker: async (run, task) => {
-        await invoke("control_attach_worker", {
+        const scratchDir = await invoke<string>("control_attach_worker", {
           leadId: run.leadId,
           sessionId: task.sessionId,
         });
@@ -5834,7 +5941,7 @@ export default function App({
             sessionsRef.current = next;
             setSessions(next);
           }
-          return;
+          return scratchDir;
         }
         const restored = await getSession(task.sessionId);
         if (
@@ -5880,12 +5987,14 @@ export default function App({
             worker.id,
             worker.providerSessionId,
             worker.cwd,
+            worker.providerAccountId,
           );
         await upsertSession(worker);
         const next = [...sessionsRef.current, worker];
         sessionsRef.current = next;
         setSessions(next);
         // Workers belong to the lead's agent panel; no workspace tab is created.
+        return scratchDir;
       },
       submit: (id, text, done) => {
         // Commit the new turn before the scheduler or confirmation updates
@@ -6171,7 +6280,10 @@ export default function App({
           (block) => block.id === blockId,
         )?.orchestration;
         if (!session || session.busy || !proposal) return;
-        onSubmit(leadId, proposal.request, [], { intent: "orchestrate" });
+        onSubmit(leadId, proposal.request, [], {
+          intent: "orchestrate",
+          orchestrationRetry: proposal,
+        });
       },
     }),
     [onOpenApprovalSession, queueWorkerPanes, onSubmit, updateOrchestrationCard],
@@ -7319,7 +7431,8 @@ export default function App({
               <UsageFooter
                 providers={usageProviders}
                 session={usageSession}
-                project={projectCwd}
+                project={active?.cwd ?? projectCwd}
+                onSelectAccount={onSelectProviderAccount}
                 terminals={runningTerminals}
                 terminalOpen={runningTerminalOpen}
                 onToggleTerminal={onToggleRunningTerminal}

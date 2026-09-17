@@ -148,13 +148,21 @@ fn env_var(name: &str) -> Option<String> {
 }
 
 /// The Go key lives at `auth.json -> "opencode-go" -> "key"` inside the
-/// OpenCode data directory. An `OPENCODE_AUTH_CONTENT` blob takes priority,
-/// mirroring OpenCode's own precedence.
+/// OpenCode data directory. Resolution mirrors OpenCode's own precedence:
+/// the `OPENCODE_AUTH_CONTENT` blob, then an explicit provider key in
+/// opencode config, then stored credentials on disk.
 fn read_opencode_go_api_key() -> Option<String> {
+    // Env-injected auth blob is authoritative when it parses: a valid blob
+    // without opencode-go means "no key", not "look elsewhere".
     if let Some(blob) = env_var("OPENCODE_AUTH_CONTENT") {
-        if let Some(key) = extract_opencode_go_api_key(&blob) {
-            return Some(key);
+        if let Ok(value) = serde_json::from_str::<Value>(&blob) {
+            if value.is_object() {
+                return extract_opencode_go_key(&value);
+            }
         }
+    }
+    if let Some(key) = read_opencode_config_api_key() {
+        return Some(key);
     }
     let primary = opencode_data_dir()?.join("auth.json");
     let raw = std::fs::read_to_string(&primary)
@@ -176,6 +184,76 @@ fn read_opencode_go_api_key() -> Option<String> {
         })
         .ok()?;
     extract_opencode_go_api_key(&raw)
+}
+
+/// Explicit `provider.options.apiKey` for the Go provider in opencode
+/// config: `OPENCODE_CONFIG_CONTENT`, then `OPENCODE_CONFIG`, then the
+/// global `opencode.json`. Only the Go provider IDs are considered so keys
+/// for unrelated providers are never picked up.
+fn read_opencode_config_api_key() -> Option<String> {
+    if let Some(content) = env_var("OPENCODE_CONFIG_CONTENT") {
+        if let Ok(value) = serde_json::from_str::<Value>(&content) {
+            if let Some(key) = config_go_api_key(&value) {
+                return Some(key);
+            }
+        }
+    }
+    opencode_config_paths()
+        .iter()
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .filter_map(|raw| serde_json::from_str::<Value>(raw.trim()).ok())
+        .find_map(|value| config_go_api_key(&value))
+}
+
+fn opencode_config_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(custom) = env_var("OPENCODE_CONFIG") {
+        paths.push(PathBuf::from(custom));
+    }
+    if let Some(xdg) = env_var("XDG_CONFIG_HOME") {
+        paths.push(PathBuf::from(xdg).join("opencode/opencode.json"));
+    }
+    if let Some(home) = dirs_home().or_else(|| {
+        std::env::var_os("USERPROFILE").map(|value| value.to_string_lossy().into_owned())
+    }) {
+        paths.push(PathBuf::from(home).join(".config/opencode/opencode.json"));
+    }
+    paths
+}
+
+fn config_go_api_key(value: &Value) -> Option<String> {
+    let providers = value.get("provider")?.as_object()?;
+    for id in ["opencode-go", "opencode"] {
+        let api_key = providers
+            .get(id)?
+            .get("options")?
+            .get("apiKey")?
+            .as_str()?
+            .trim();
+        if api_key.is_empty() {
+            continue;
+        }
+        if let Some(var) = api_key
+            .strip_prefix("{env:")
+            .and_then(|rest| rest.strip_suffix('}'))
+        {
+            if let Some(resolved) = env_var(var) {
+                return Some(resolved);
+            }
+            continue;
+        }
+        return Some(api_key.to_string());
+    }
+    None
+}
+
+fn extract_opencode_go_key(value: &Value) -> Option<String> {
+    let key = value.get("opencode-go")?.get("key")?.as_str()?.trim();
+    if key.is_empty() {
+        None
+    } else {
+        Some(key.to_string())
+    }
 }
 
 pub(crate) fn extract_opencode_go_api_key(raw: &str) -> Option<String> {
@@ -529,6 +607,43 @@ mod tests {
         std::env::set_var("OPENCODE_DATA_DIR", "/tmp/custom-data");
         assert_eq!(opencode_data_dir(), Some(PathBuf::from("/tmp/custom-data")));
         std::env::remove_var("OPENCODE_DATA_DIR");
+    }
+
+    #[test]
+    fn config_go_api_key_reads_provider_options() {
+        let value: Value = serde_json::from_str(
+            r#"{"provider":{"anthropic":{"options":{"apiKey":"sk-ant-x"}},"opencode-go":{"options":{"apiKey":"sk-go-cfg"}}}}"#,
+        )
+        .unwrap();
+        assert_eq!(config_go_api_key(&value).as_deref(), Some("sk-go-cfg"));
+    }
+
+    #[test]
+    fn config_go_api_key_ignores_other_providers_and_supports_env() {
+        let value: Value =
+            serde_json::from_str(r#"{"provider":{"anthropic":{"options":{"apiKey":"sk-ant-x"}}}}"#)
+                .unwrap();
+        assert_eq!(config_go_api_key(&value), None);
+
+        std::env::set_var("MONOCODE_TEST_GO_KEY", "sk-go-env");
+        let value: Value = serde_json::from_str(
+            r#"{"provider":{"opencode-go":{"options":{"apiKey":"{env:MONOCODE_TEST_GO_KEY}"}}}}"#,
+        )
+        .unwrap();
+        assert_eq!(config_go_api_key(&value).as_deref(), Some("sk-go-env"));
+        std::env::remove_var("MONOCODE_TEST_GO_KEY");
+    }
+
+    #[test]
+    fn auth_content_blob_without_key_stays_authoritative() {
+        // A valid blob without opencode-go means "no key", even when disk
+        // credentials exist: no fallback to auth.json.
+        std::env::set_var(
+            "OPENCODE_AUTH_CONTENT",
+            r#"{"openai":{"type":"api","key":"sk-openai-x"}}"#,
+        );
+        assert_eq!(read_opencode_go_api_key(), None);
+        std::env::remove_var("OPENCODE_AUTH_CONTENT");
     }
 
     #[test]

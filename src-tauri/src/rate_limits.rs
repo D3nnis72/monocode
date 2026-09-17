@@ -123,12 +123,57 @@ fn opencode_go_error(status: u16) -> OpencodeGoUsageFetch {
     opencode_go_result("error", Some(status), None, Some(message))
 }
 
-/// The Go key lives at `auth.json -> "opencode-go" -> "key"`.
-fn read_opencode_go_api_key() -> Option<String> {
+/// Resolve the OpenCode data directory the same way OpenCode does:
+/// `OPENCODE_DATA_DIR`, then `$XDG_DATA_HOME/<app>`, then the default
+/// `~/.local/share/<app>`, where `<app>` is `OPENCODE_APPNAME` or "opencode".
+fn opencode_data_dir() -> Option<PathBuf> {
+    if let Some(dir) = env_var("OPENCODE_DATA_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+    let app = env_var("OPENCODE_APPNAME").unwrap_or_else(|| "opencode".into());
+    if let Some(xdg) = env_var("XDG_DATA_HOME") {
+        return Some(PathBuf::from(xdg).join(app));
+    }
     let home = dirs_home().or_else(|| {
         std::env::var_os("USERPROFILE").map(|value| value.to_string_lossy().into_owned())
     })?;
-    let raw = std::fs::read_to_string(PathBuf::from(home).join(".local/share/opencode/auth.json"))
+    Some(PathBuf::from(home).join(".local/share").join(app))
+}
+
+fn env_var(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// The Go key lives at `auth.json -> "opencode-go" -> "key"` inside the
+/// OpenCode data directory. An `OPENCODE_AUTH_CONTENT` blob takes priority,
+/// mirroring OpenCode's own precedence.
+fn read_opencode_go_api_key() -> Option<String> {
+    if let Some(blob) = env_var("OPENCODE_AUTH_CONTENT") {
+        if let Some(key) = extract_opencode_go_api_key(&blob) {
+            return Some(key);
+        }
+    }
+    let primary = opencode_data_dir()?.join("auth.json");
+    let raw = std::fs::read_to_string(&primary)
+        .or_else(|_| {
+            // Legacy macOS location.
+            dirs_home()
+                .or_else(|| {
+                    std::env::var_os("USERPROFILE")
+                        .map(|value| value.to_string_lossy().into_owned())
+                })
+                .ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::NotFound, "no home directory")
+                })
+                .and_then(|home| {
+                    std::fs::read_to_string(
+                        PathBuf::from(home).join("Library/Application Support/opencode/auth.json"),
+                    )
+                })
+        })
         .ok()?;
     extract_opencode_go_api_key(&raw)
 }
@@ -477,6 +522,13 @@ mod tests {
             None
         );
         assert_eq!(extract_opencode_go_api_key("not json"), None);
+    }
+
+    #[test]
+    fn opencode_data_dir_prefers_explicit_override() {
+        std::env::set_var("OPENCODE_DATA_DIR", "/tmp/custom-data");
+        assert_eq!(opencode_data_dir(), Some(PathBuf::from("/tmp/custom-data")));
+        std::env::remove_var("OPENCODE_DATA_DIR");
     }
 
     #[test]

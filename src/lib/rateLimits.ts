@@ -370,7 +370,9 @@ function mapOpencodeGoWindow(
 ): RateLimitWindow | null {
   const rec = asRecord(raw);
   if (!rec) return null;
-  const status = typeof rec.status === "string" ? rec.status : "ok";
+  // Require an explicit valid status; unknown shapes are dropped so the
+  // caller can treat a fully empty payload as an error, not a snapshot.
+  const status = rec.status;
   if (status !== "ok" && status !== "rate-limited") return null;
   const usedPercent =
     numberField(rec, "percent") ?? numberField(rec, "usedPercent");

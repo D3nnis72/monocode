@@ -262,6 +262,7 @@ describe("parseOpencodeGoUsage", () => {
       usage: {
         rolling: { status: "ok", percent: 5, resetsAt: null },
         weekly: { status: "expired", percent: 50, resetsAt: null },
+        monthly: { percent: 50, resetsAt: null },
       },
     });
     expect(limits.session?.usedPercent).toBe(5);

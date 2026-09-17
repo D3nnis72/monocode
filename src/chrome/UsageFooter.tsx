@@ -231,7 +231,9 @@ export function UsageFooter({
     [reconnectProvider],
   );
 
-  const showUsage = wantClaude || wantCodex || wantOpencode;
+  const showOpencodeChip =
+    wantOpencode && opencode.status !== "unavailable";
+  const showUsage = wantClaude || wantCodex || showOpencodeChip;
   const showTerminals = terminals.length > 0;
   const showTerminalButton = Boolean(onNewTerminal || onShowTerminal);
   const terminalLabel = projectTerminalActive
@@ -271,7 +273,7 @@ export function UsageFooter({
               onReconnect={reconnectCodex}
             />
           ) : null}
-          {wantOpencode && opencode.status !== "unavailable" ? (
+          {showOpencodeChip ? (
             <UsageProviderChip limits={opencode} now={now} project={project} />
           ) : null}
           <button

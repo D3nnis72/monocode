@@ -52,7 +52,12 @@ export async function fetchOpencodeGoRateLimits(): Promise<ProviderRateLimits> {
     } catch {
       return errorRateLimits("opencode", "OpenCode Go response was not JSON");
     }
-    return unavailableRateLimits("opencode", "No OpenCode Go usage data");
+    // A 200 with no usable windows is malformed: report an error so the
+    // footer retries instead of sticking in "unavailable" forever.
+    return errorRateLimits(
+      "opencode",
+      "OpenCode Go usage response was unexpected",
+    );
   }
   if (result.status === "unavailable") {
     return unavailableRateLimits(

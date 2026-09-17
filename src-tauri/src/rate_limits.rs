@@ -224,15 +224,16 @@ fn opencode_config_paths() -> Vec<PathBuf> {
 fn config_go_api_key(value: &Value) -> Option<String> {
     let providers = value.get("provider")?.as_object()?;
     for id in ["opencode-go", "opencode"] {
-        let api_key = providers
-            .get(id)?
-            .get("options")?
-            .get("apiKey")?
-            .as_str()?
-            .trim();
-        if api_key.is_empty() {
+        let Some(api_key) = providers
+            .get(id)
+            .and_then(|entry| entry.get("options"))
+            .and_then(|options| options.get("apiKey"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+        else {
             continue;
-        }
+        };
         if let Some(var) = api_key
             .strip_prefix("{env:")
             .and_then(|rest| rest.strip_suffix('}'))
@@ -616,6 +617,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(config_go_api_key(&value).as_deref(), Some("sk-go-cfg"));
+    }
+
+    #[test]
+    fn config_go_api_key_falls_through_to_opencode_provider() {
+        let value: Value = serde_json::from_str(
+            r#"{"provider":{"opencode":{"options":{"apiKey":"sk-go-opencode"}}}}"#,
+        )
+        .unwrap();
+        assert_eq!(config_go_api_key(&value).as_deref(), Some("sk-go-opencode"));
     }
 
     #[test]

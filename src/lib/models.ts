@@ -388,6 +388,11 @@ const EFFORT_SETTING_IDS = new Set([
   "variant",
 ]);
 
+/** True for the select setting ids that control reasoning effort. */
+export function isEffortSettingId(id: string): boolean {
+  return EFFORT_SETTING_IDS.has(id);
+}
+
 /** The select setting that controls reasoning effort for this model, if any. */
 export function modelEffortSetting(
   model: AgentModel,

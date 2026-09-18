@@ -14,6 +14,7 @@ import {
   findModel,
   getModelSnapshot,
   getPickerVisibilitySnapshot,
+  isEffortSettingId,
   loadFavoriteModels,
   loadRecentModelChoices,
   modelsFor,
@@ -105,16 +106,8 @@ const PILL_ORDER = [
   "context",
 ];
 
-const EFFORT_SETTING_IDS = new Set([
-  "effort",
-  "reasoning",
-  "reasoningEffort",
-  // Must match models.ts: OpenCode `variant` is a reasoning level.
-  "variant",
-]);
-
 function isEffortSetting(setting: ModelSetting): boolean {
-  return EFFORT_SETTING_IDS.has(setting.id);
+  return isEffortSettingId(setting.id);
 }
 
 function effortSetting(model: AgentModel): ModelSetting | undefined {
@@ -417,7 +410,7 @@ export function ModelPicker({
       if (target.closest(".monocode-terminal")) return true;
       return Boolean(
         target.closest(
-            "[data-file-picker], [data-branch-picker], [data-skill-picker], [data-mention-picker], [data-access-picker], [data-model-control]",
+          "[data-file-picker], [data-branch-picker], [data-skill-picker], [data-mention-picker], [data-access-picker], [data-model-control]",
         ),
       );
     };
@@ -639,28 +632,29 @@ export function ModelPicker({
         />
       </button>
 
-      {open ? (
-        hideSettings ? (
-          <ModelFlyout
-            anchor={button}
-            side="top"
-            autoFocusSearch
-            onDismiss={(reason) => dismiss(reason === "escape")}
-            harnesses={pickerHarnesses}
-            tab={visibleTab}
-            models={visibleModels}
-            currentId={current.id}
-            active={activeModel}
-            query={query}
-            favorites={favorites}
-            searchRef={search}
-            onQuery={setQuery}
-            onSelectTab={selectTab}
-            onActive={setActiveModel}
-            onPick={pickModel}
-            onToggleFavorite={toggleFavorite}
-          />
-        ) : (
+      {open && hideSettings ? (
+        <ModelFlyout
+          anchor={button}
+          side="top"
+          autoFocusSearch
+          onDismiss={(reason) => dismiss(reason === "escape")}
+          harnesses={pickerHarnesses}
+          tab={visibleTab}
+          models={visibleModels}
+          currentId={current.id}
+          active={activeModel}
+          query={query}
+          favorites={favorites}
+          searchRef={search}
+          onQuery={setQuery}
+          onSelectTab={selectTab}
+          onActive={setActiveModel}
+          onPick={pickModel}
+          onToggleFavorite={toggleFavorite}
+        />
+      ) : null}
+
+      {open && !hideSettings ? (
         <>
           <Popover
             anchor={button}
@@ -852,7 +846,6 @@ export function ModelPicker({
             />
           ) : null}
         </>
-        )
       ) : null}
 
       {recentMenu ? (
@@ -1226,6 +1219,8 @@ function ModelFlyout({
         }
         if (event.key !== "Enter") return;
         event.preventDefault();
+        // Buttons (model rows, favorites) fire their own click on Enter.
+        if (event.target instanceof HTMLButtonElement) return;
         const item = models[active];
         if (item) onPick(item);
       }}

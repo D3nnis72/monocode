@@ -839,14 +839,14 @@ function ChatPage() {
         <Row
           id="model-controls"
           label="Model controls"
-          description="Show effort, Fast, service tier and other model options as separate controls beside the model picker instead of inside the model menu."
+          description="Show model options beside the picker instead of inside the model menu."
         >
           <Segmented
             label="Model controls"
             value={modelControls}
             options={[
-              { value: "menu", label: "In model menu" },
-              { value: "beside", label: "Beside picker" },
+              { value: "menu", label: "Menu" },
+              { value: "beside", label: "Beside" },
             ]}
             onChange={onModelControls}
           />

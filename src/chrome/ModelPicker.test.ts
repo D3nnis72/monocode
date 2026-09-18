@@ -63,7 +63,7 @@ vi.mock("./Popover", () => ({
     ),
 }));
 
-import { EffortPicker, ModelPicker } from "./ModelPicker";
+import { ModelControlPills, ModelPicker } from "./ModelPicker";
 import {
   resetHarnessModelOverlays,
   saveRecentModelChoice,
@@ -314,11 +314,11 @@ describe("model picker", () => {
             harness: "grok",
             model: "grok:grok-4.6",
             values: { effort: "high" },
-            hideEffort: true,
+            hideSettings: true,
             onChange: vi.fn(),
             onSettingsChange,
           }),
-          createElement(EffortPicker, {
+          createElement(ModelControlPills, {
             harness: "grok",
             model: "grok:grok-4.6",
             values: { effort: "high" },
@@ -352,6 +352,113 @@ describe("model picker", () => {
     keyDown(effortMenu, "ArrowUp");
     keyDown(effortMenu, "Enter");
     expect(onSettingsChange).toHaveBeenCalledWith({ effort: "xhigh" });
+  });
+
+  it("keeps only the model row in the menu when settings live beside the picker", () => {
+    setHarnessModels("cursor", [
+      {
+        id: "cursor:composer-2.5",
+        harness: "cursor",
+        name: "Composer 2.5",
+        nativeId: "composer-2.5",
+        settings: [
+          {
+            id: "fast",
+            label: "Fast",
+            kind: "toggle",
+            value: "false",
+            options: [
+              { value: "false", label: "Off" },
+              { value: "true", label: "On" },
+            ],
+          },
+        ],
+      },
+    ]);
+    const onSettingsChange = vi.fn();
+    act(() =>
+      root.render(
+        createElement(
+          "div",
+          null,
+          createElement(ModelPicker, {
+            harness: "cursor",
+            model: "cursor:composer-2.5",
+            values: { fast: "false" },
+            hideSettings: true,
+            onChange: vi.fn(),
+            onSettingsChange,
+          }),
+          createElement(ModelControlPills, {
+            harness: "cursor",
+            model: "cursor:composer-2.5",
+            values: { fast: "false" },
+            onSettingsChange,
+          }),
+        ),
+      ),
+    );
+
+    const modelTrigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="menu"]',
+    )!;
+    act(() => modelTrigger.click());
+    const modelMenu = container.querySelector<HTMLElement>(
+      '[role="menu"][aria-label="Model and settings"]',
+    )!;
+    expect(modelMenu.textContent).not.toContain("Fast");
+
+    const fastPill = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Fast: Off"]',
+    )!;
+    expect(fastPill.getAttribute("aria-pressed")).toBe("false");
+    act(() => fastPill.click());
+    expect(onSettingsChange).toHaveBeenCalledWith({ fast: "true" });
+  });
+
+  it("renders the OpenCode variant as a beside-picker pill", () => {
+    setHarnessModels("opencode", [
+      {
+        id: "opencode:some-cloud/spark-1",
+        harness: "opencode",
+        name: "Spark 1",
+        nativeId: "some-cloud/spark-1",
+        provider: { id: "some-cloud", name: "Some Cloud" },
+        settings: [
+          {
+            id: "variant",
+            label: "Variant",
+            kind: "select",
+            value: "high",
+            options: [
+              { value: "low", label: "Low" },
+              { value: "medium", label: "Medium" },
+              { value: "high", label: "High" },
+              { value: "xhigh", label: "Extra High" },
+            ],
+          },
+        ],
+      },
+    ]);
+    act(() =>
+      root.render(
+        createElement(ModelControlPills, {
+          harness: "opencode",
+          model: "opencode:some-cloud/spark-1",
+          values: { variant: "high" },
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    const variantPill = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Variant: High"]',
+    )!;
+    expect(variantPill.textContent).toBe("High");
+    act(() => variantPill.click());
+    expect(
+      container.querySelector('[role="menu"][aria-label="Variant"]'),
+    ).not.toBeNull();
   });
 
   it("returns to the selected model's harness when reopened", () => {
@@ -476,7 +583,7 @@ describe("model picker", () => {
       ),
     ).not.toBeNull();
     expect(
-      container.querySelector('[role="menu"][aria-label="Model and effort"]'),
+      container.querySelector('[role="menu"][aria-label="Model and settings"]'),
     ).toBeNull();
   });
 });

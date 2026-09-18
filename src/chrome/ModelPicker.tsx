@@ -46,7 +46,8 @@ type Props = {
   harness: HarnessId;
   model: string;
   values: Record<string, string>;
-  hideEffort?: boolean;
+  /** Hide option rows from the menu when they render as pills beside the picker. */
+  hideSettings?: boolean;
   hotkeys?: boolean;
   onChange: (harness: HarnessId, model: string) => void;
   onSettingsChange: (settings: Record<string, string>) => void;
@@ -85,9 +86,22 @@ const SETTING_ORDER = [
   "effort",
   "reasoning",
   "reasoningEffort",
+  "serviceTier",
   "thinking",
   "variant",
   "agent",
+  "context",
+];
+
+/** Toolbar pill order: reasoning level first, then the remaining controls. */
+const PILL_ORDER = [
+  "effort",
+  "reasoning",
+  "reasoningEffort",
+  "variant",
+  "fast",
+  "thinking",
+  "serviceTier",
   "context",
 ];
 
@@ -110,15 +124,27 @@ function effortSetting(model: AgentModel): ModelSetting | undefined {
 }
 
 function pickerSettings(model: AgentModel): ModelSetting[] {
-  return [...(model.settings ?? [])]
-    .filter(
-      (setting) => !(model.harness === "opencode" && setting.id === "agent"),
-    )
-    .sort((a, b) => {
-      const ai = SETTING_ORDER.indexOf(a.id);
-      const bi = SETTING_ORDER.indexOf(b.id);
-      return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
-    });
+  return [...menuVisibleSettings(model)].sort((a, b) => {
+    const ai = SETTING_ORDER.indexOf(a.id);
+    const bi = SETTING_ORDER.indexOf(b.id);
+    return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+  });
+}
+
+/** Settings without the OpenCode agent row, which never shows in the menu. */
+function menuVisibleSettings(model: AgentModel): ModelSetting[] {
+  return (model.settings ?? []).filter(
+    (setting) => !(model.harness === "opencode" && setting.id === "agent"),
+  );
+}
+
+/** Standalone toolbar pills, reasoning level first. */
+function pillSettings(model: AgentModel): ModelSetting[] {
+  return [...menuVisibleSettings(model)].sort((a, b) => {
+    const ai = PILL_ORDER.indexOf(a.id);
+    const bi = PILL_ORDER.indexOf(b.id);
+    return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+  });
 }
 
 function settingLabel(setting: ModelSetting): string {
@@ -180,7 +206,7 @@ export function ModelPicker({
   harness,
   model,
   values,
-  hideEffort = false,
+  hideSettings = false,
   hotkeys = false,
   onChange,
   onSettingsChange,
@@ -228,10 +254,10 @@ export function ModelPicker({
   currentRef.current = current;
   const settings = useMemo(() => {
     void catalogVersion;
-    return pickerSettings(current).filter(
-      (setting) => !hideEffort || !isEffortSetting(setting),
-    );
-  }, [catalogVersion, current, hideEffort]);
+    // In beside-picker mode every option row renders as a toolbar pill, so the
+    // menu lists models only.
+    return hideSettings ? [] : pickerSettings(current);
+  }, [catalogVersion, current, hideSettings]);
   const entries = useMemo<MenuEntry[]>(
     () => [
       ...settings.map((setting) => ({
@@ -243,7 +269,9 @@ export function ModelPicker({
     [settings],
   );
 
-  const triggerEffortSetting = hideEffort ? undefined : effortSetting(current);
+  const triggerEffortSetting = hideSettings
+    ? undefined
+    : effortSetting(current);
   const triggerEffortLabel = triggerEffortSetting
     ? settingValueLabel(triggerEffortSetting, values)
     : undefined;
@@ -387,7 +415,7 @@ export function ModelPicker({
       if (target.closest(".monocode-terminal")) return true;
       return Boolean(
         target.closest(
-          "[data-file-picker], [data-branch-picker], [data-skill-picker], [data-mention-picker], [data-access-picker], [data-effort-picker]",
+            "[data-file-picker], [data-branch-picker], [data-skill-picker], [data-mention-picker], [data-access-picker], [data-model-control]",
         ),
       );
     };
@@ -620,7 +648,7 @@ export function ModelPicker({
             ignore={SELF}
             onDismiss={() => dismiss(false)}
             role="menu"
-            aria-label="Model and effort"
+            aria-label="Model and settings"
             tabIndex={-1}
             onKeyDown={onMenuKey}
             data-model-picker
@@ -872,7 +900,7 @@ export function ModelPicker({
   );
 }
 
-export function EffortPicker({
+export function ModelControlPills({
   harness,
   model,
   values,
@@ -887,18 +915,85 @@ export function EffortPicker({
     getModelSnapshot,
     getModelSnapshot,
   );
+  void catalogVersion;
+  const current = resolveModel(harness, model);
+  const pills = pillSettings(current);
+  if (pills.length === 0) return null;
+  return (
+    <>
+      {pills.map((setting) =>
+        setting.kind === "toggle" ? (
+          <TogglePill
+            key={setting.id}
+            setting={setting}
+            values={values}
+            onSettingsChange={onSettingsChange}
+          />
+        ) : (
+          <SelectPill
+            key={setting.id}
+            setting={setting}
+            values={values}
+            onSettingsChange={onSettingsChange}
+            onClose={onClose}
+          />
+        ),
+      )}
+    </>
+  );
+}
+
+function TogglePill({
+  setting,
+  values,
+  onSettingsChange,
+}: {
+  setting: ModelSetting;
+  values: Record<string, string>;
+  onSettingsChange: (settings: Record<string, string>) => void;
+}) {
+  const on = settingValue(setting, values) === "true";
+  return (
+    <button
+      type="button"
+      title={`${setting.label}: ${on ? "On" : "Off"}`}
+      aria-label={`${setting.label}: ${on ? "On" : "Off"}`}
+      aria-pressed={on}
+      data-model-control
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() =>
+        onSettingsChange({ ...values, [setting.id]: on ? "false" : "true" })
+      }
+      className="flex h-6.5 max-w-28 items-center gap-1 rounded-md bg-selection px-1.5 text-content hover:bg-selection-hover"
+    >
+      <span
+        className={`min-w-0 truncate text-[11px] ${on ? "" : "text-content/50"}`}
+      >
+        {setting.label}
+      </span>
+    </button>
+  );
+}
+
+function SelectPill({
+  setting,
+  values,
+  onSettingsChange,
+  onClose,
+}: {
+  setting: ModelSetting;
+  values: Record<string, string>;
+  onSettingsChange: (settings: Record<string, string>) => void;
+  onClose?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const button = useRef<HTMLButtonElement>(null);
   const menuId = useId();
-  const current = resolveModel(harness, model);
-  void catalogVersion;
-  const setting = effortSetting(current);
-
-  if (!setting) return null;
 
   const value = settingValue(setting, values);
   const valueLabel = settingValueLabel(setting, values);
+  const label = settingLabel(setting);
   const dismiss = (restoreFocus: boolean) => {
     setOpen(false);
     if (restoreFocus) onClose?.();
@@ -920,10 +1015,11 @@ export function EffortPicker({
       <button
         ref={button}
         type="button"
-        title={`Effort: ${valueLabel}`}
-        aria-label={`Effort: ${valueLabel}`}
+        title={`${label}: ${valueLabel}`}
+        aria-label={`${label}: ${valueLabel}`}
         aria-expanded={open}
         aria-haspopup="menu"
+        data-model-control
         onMouseDown={(event) => event.preventDefault()}
         onClick={() => (open ? dismiss(true) : openPicker())}
         className={`flex h-6.5 max-w-28 items-center gap-1 rounded-md px-1.5 ${
@@ -932,7 +1028,9 @@ export function EffortPicker({
             : "bg-selection text-content hover:bg-selection-hover"
         }`}
       >
-        <Gauge className="size-3.5 shrink-0" strokeWidth={1.75} />
+        {isEffortSetting(setting) ? (
+          <Gauge className="size-3.5 shrink-0" strokeWidth={1.75} />
+        ) : null}
         <span className="min-w-0 truncate text-[11px]">{valueLabel}</span>
         <ChevronDown
           className={`size-3 shrink-0 text-content/50 ${open ? "rotate-180" : ""}`}
@@ -948,7 +1046,7 @@ export function EffortPicker({
           autoFocus
           onDismiss={(reason) => dismiss(reason === "escape")}
           role="menu"
-          aria-label="Effort"
+          aria-label={label}
           aria-activedescendant={`${menuId}-${active}`}
           tabIndex={-1}
           onKeyDown={(event) => {
@@ -967,7 +1065,7 @@ export function EffortPicker({
             const option = setting.options[active];
             if (option) pick(option.value);
           }}
-          data-effort-picker
+          data-model-control
           className="p-1 font-sans"
         >
           {setting.options.map((option, index) => {

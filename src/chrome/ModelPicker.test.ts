@@ -303,6 +303,74 @@ describe("model picker", () => {
     expect(container.querySelectorAll('[role="option"]')).toHaveLength(2);
   });
 
+  it("names the source of same-name favorites from different providers", () => {
+    setHarnessModels("cursor", [
+      {
+        id: "cursor:auto",
+        harness: "cursor",
+        name: "Auto",
+        nativeId: "auto",
+      },
+      {
+        id: "cursor:muse-spark-1.3",
+        harness: "cursor",
+        name: "Muse Spark 1.3",
+        nativeId: "muse-spark-1.3",
+      },
+    ]);
+    setHarnessModels("opencode", [
+      {
+        id: "opencode:opencode-go/muse-spark-1.3",
+        harness: "opencode",
+        name: "Muse Spark 1.3",
+        nativeId: "opencode-go/muse-spark-1.3",
+        provider: { id: "opencode-go", name: "OpenCode Go" },
+      },
+    ]);
+    localStorage.setItem(
+      "monocode.favoriteModels",
+      JSON.stringify([
+        "cursor:auto",
+        "cursor:muse-spark-1.3",
+        "opencode:opencode-go/muse-spark-1.3",
+      ]),
+    );
+
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "cursor",
+          model: "cursor:auto",
+          values: {},
+          onChange: vi.fn(),
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="menu"]',
+    )!;
+    act(() => trigger.click());
+    const modelRow = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent?.startsWith("Model"))!;
+    hover(modelRow);
+    const favoritesTab = container.querySelector<HTMLButtonElement>(
+      '[role="tab"][aria-label="Favorites"]',
+    )!;
+    act(() => favoritesTab.click());
+
+    const options = [
+      ...container.querySelectorAll('[role="option"]'),
+    ].map((option) => option.getAttribute("aria-label"));
+    expect(options).toEqual([
+      "Auto, Cursor",
+      "Muse Spark 1.3, Cursor",
+      "Muse Spark 1.3, OpenCode Go",
+    ]);
+  });
+
   it("can move effort into a dedicated composer control", () => {
     const onSettingsChange = vi.fn();
     act(() =>

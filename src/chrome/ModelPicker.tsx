@@ -1310,6 +1310,10 @@ function ModelFlyout({
                   const highlighted = index === active;
                   const favorited = favorites.includes(item.id);
                   const disabled = !isHarnessAvailable(item.harness);
+                  // Favorites mix harnesses, so every row names its source.
+                  // Provider first (OpenCode Go vs OpenCode), else harness.
+                  const provenance =
+                    item.provider?.name ?? HARNESS_TITLE[item.harness];
                   return (
                     <div
                       key={item.id}
@@ -1327,11 +1331,7 @@ function ModelFlyout({
                         type="button"
                         role="option"
                         aria-selected={selected}
-                        aria-label={
-                          item.provider
-                            ? `${item.name}, ${item.provider.name}`
-                            : undefined
-                        }
+                        aria-label={`${item.name}, ${provenance}`}
                         disabled={disabled}
                         title={
                           disabled
@@ -1346,9 +1346,9 @@ function ModelFlyout({
                           {item.name}
                         </span>
                       </button>
-                      {tab === "favorites" && item.provider ? (
+                      {tab === "favorites" ? (
                         <span className="max-w-24 shrink-0 truncate text-[10px] text-content/40">
-                          {item.provider.name}
+                          {provenance}
                         </span>
                       ) : null}
                       <button

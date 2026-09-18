@@ -468,7 +468,7 @@ describe("model picker", () => {
     );
 
     const modelTrigger = container.querySelector<HTMLButtonElement>(
-      'button[aria-haspopup="menu"]',
+      'button[aria-haspopup="dialog"]',
     )!;
     act(() => modelTrigger.click());
     expect(
@@ -567,7 +567,7 @@ describe("model picker", () => {
     );
 
     const modelTrigger = container.querySelector<HTMLButtonElement>(
-      'button[aria-haspopup="menu"]',
+      'button[aria-haspopup="dialog"]',
     )!;
     act(() => modelTrigger.click());
     expect(container.querySelector('[role="menu"]')).toBeNull();
@@ -582,6 +582,93 @@ describe("model picker", () => {
     )!;
     act(() => selected.click());
     expect(onChange).toHaveBeenCalledWith("cursor", "cursor:composer-2.5");
+  });
+
+  it("picks the highlighted model on Enter even when focus sits on another row", () => {
+    setHarnessModels("cursor", [
+      {
+        id: "cursor:first",
+        harness: "cursor",
+        name: "First",
+        nativeId: "first",
+      },
+      {
+        id: "cursor:second",
+        harness: "cursor",
+        name: "Second",
+        nativeId: "second",
+      },
+    ]);
+    const onChange = vi.fn();
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "cursor",
+          model: "cursor:first",
+          values: {},
+          hideSettings: true,
+          onChange,
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    const modelTrigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="dialog"]',
+    )!;
+    act(() => modelTrigger.click());
+    const options = [
+      ...container.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ];
+    expect(options).toHaveLength(2);
+    // Focus stays on the first row while arrows move the highlight.
+    options[0].focus();
+    keyDown(options[0], "ArrowDown");
+    keyDown(options[0], "Enter");
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith("cursor", "cursor:second");
+  });
+
+  it("leaves favorite toggles to native activation on Enter", () => {
+    setHarnessModels("cursor", [
+      {
+        id: "cursor:first",
+        harness: "cursor",
+        name: "First",
+        nativeId: "first",
+      },
+      {
+        id: "cursor:second",
+        harness: "cursor",
+        name: "Second",
+        nativeId: "second",
+      },
+    ]);
+    const onChange = vi.fn();
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "cursor",
+          model: "cursor:first",
+          values: {},
+          hideSettings: true,
+          onChange,
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    const modelTrigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="dialog"]',
+    )!;
+    act(() => modelTrigger.click());
+    const star = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Add to favorites"]',
+    )!;
+    star.focus();
+    keyDown(star, "Enter");
+    // No model pick hijacks the favorite toggle (native click owns it).
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("returns to the selected model's harness when reopened", () => {

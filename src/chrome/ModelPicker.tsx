@@ -605,7 +605,7 @@ export function ModelPicker({
         }`}
         aria-keyshortcuts={`${MOD}.`}
         aria-expanded={open || recentMenu != null}
-        aria-haspopup="menu"
+        aria-haspopup={hideSettings ? "dialog" : "menu"}
         onMouseDown={(event) => event.preventDefault()}
         onContextMenu={(event) => {
           event.preventDefault();
@@ -1218,9 +1218,15 @@ function ModelFlyout({
           return;
         }
         if (event.key !== "Enter") return;
+        // Favorite toggles keep native activation; model rows activate the
+        // highlighted option so Enter never fires on a stale focused row.
+        if (
+          event.target instanceof HTMLButtonElement &&
+          event.target.getAttribute("role") !== "option"
+        ) {
+          return;
+        }
         event.preventDefault();
-        // Buttons (model rows, favorites) fire their own click on Enter.
-        if (event.target instanceof HTMLButtonElement) return;
         const item = models[active];
         if (item) onPick(item);
       }}

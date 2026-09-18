@@ -91,7 +91,13 @@ const SETTING_ORDER = [
   "context",
 ];
 
-const EFFORT_SETTING_IDS = new Set(["effort", "reasoning", "reasoningEffort"]);
+const EFFORT_SETTING_IDS = new Set([
+  "effort",
+  "reasoning",
+  "reasoningEffort",
+  // Must match models.ts: OpenCode `variant` is a reasoning level.
+  "variant",
+]);
 
 function isEffortSetting(setting: ModelSetting): boolean {
   return EFFORT_SETTING_IDS.has(setting.id);

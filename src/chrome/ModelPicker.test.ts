@@ -354,7 +354,7 @@ describe("model picker", () => {
     expect(onSettingsChange).toHaveBeenCalledWith({ effort: "xhigh" });
   });
 
-  it("keeps only the model row in the menu when settings live beside the picker", () => {
+  it("opens the model list with no intermediate menu when settings live beside the picker", () => {
     setHarnessModels("cursor", [
       {
         id: "cursor:composer-2.5",
@@ -403,10 +403,12 @@ describe("model picker", () => {
       'button[aria-haspopup="menu"]',
     )!;
     act(() => modelTrigger.click());
-    const modelMenu = container.querySelector<HTMLElement>(
-      '[role="menu"][aria-label="Model and settings"]',
-    )!;
-    expect(modelMenu.textContent).not.toContain("Fast");
+    expect(
+      container.querySelector('[role="menu"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[role="dialog"][aria-label="Models"]'),
+    ).not.toBeNull();
 
     const fastPill = container.querySelector<HTMLButtonElement>(
       'button[aria-label="Fast: Off"]',
@@ -459,6 +461,59 @@ describe("model picker", () => {
     expect(
       container.querySelector('[role="menu"][aria-label="Variant"]'),
     ).not.toBeNull();
+  });
+
+  it("opens the model list directly when settings live beside the picker", () => {
+    setHarnessModels("cursor", [
+      {
+        id: "cursor:composer-2.5",
+        harness: "cursor",
+        name: "Composer 2.5",
+        nativeId: "composer-2.5",
+        settings: [
+          {
+            id: "fast",
+            label: "Fast",
+            kind: "toggle",
+            value: "false",
+            options: [
+              { value: "false", label: "Off" },
+              { value: "true", label: "On" },
+            ],
+          },
+        ],
+      },
+    ]);
+    const onChange = vi.fn();
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "cursor",
+          model: "cursor:composer-2.5",
+          values: { fast: "false" },
+          hideSettings: true,
+          onChange,
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    const modelTrigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="menu"]',
+    )!;
+    act(() => modelTrigger.click());
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+    const flyout = container.querySelector<HTMLElement>(
+      '[role="dialog"][aria-label="Models"]',
+    )!;
+    expect(flyout).not.toBeNull();
+    expect(flyout.textContent).toContain("Composer 2.5");
+
+    const selected = flyout.querySelector<HTMLButtonElement>(
+      '[role="option"][aria-selected="true"]',
+    )!;
+    act(() => selected.click());
+    expect(onChange).toHaveBeenCalledWith("cursor", "cursor:composer-2.5");
   });
 
   it("returns to the selected model's harness when reopened", () => {

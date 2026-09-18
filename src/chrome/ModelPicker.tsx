@@ -372,10 +372,12 @@ export function ModelPicker({
       ),
     );
     setActive(0);
-    setSubmenu(null);
+    // Beside-picker mode leaves only the Model row; open its list directly
+    // instead of making it one more hover step.
+    setSubmenu(hideSettings ? { kind: "models" } : null);
     setQuery("");
     setFavorites(loadFavoriteModels());
-  }, [open, current.harness]);
+  }, [open, current.harness, hideSettings]);
 
   useEffect(() => {
     if (visibleTab === tab) return;
@@ -638,6 +640,27 @@ export function ModelPicker({
       </button>
 
       {open ? (
+        hideSettings ? (
+          <ModelFlyout
+            anchor={button}
+            side="top"
+            autoFocusSearch
+            onDismiss={(reason) => dismiss(reason === "escape")}
+            harnesses={pickerHarnesses}
+            tab={visibleTab}
+            models={visibleModels}
+            currentId={current.id}
+            active={activeModel}
+            query={query}
+            favorites={favorites}
+            searchRef={search}
+            onQuery={setQuery}
+            onSelectTab={selectTab}
+            onActive={setActiveModel}
+            onPick={pickModel}
+            onToggleFavorite={toggleFavorite}
+          />
+        ) : (
         <>
           <Popover
             anchor={button}
@@ -829,6 +852,7 @@ export function ModelPicker({
             />
           ) : null}
         </>
+        )
       ) : null}
 
       {recentMenu ? (
@@ -1103,6 +1127,9 @@ function SelectPill({
 
 function ModelFlyout({
   anchor,
+  side = "right",
+  autoFocusSearch = false,
+  onDismiss,
   harnesses,
   tab,
   models,
@@ -1117,7 +1144,10 @@ function ModelFlyout({
   onPick,
   onToggleFavorite,
 }: {
-  anchor: HTMLButtonElement;
+  anchor: HTMLButtonElement | { current: HTMLButtonElement | null };
+  side?: "right" | "top";
+  autoFocusSearch?: boolean;
+  onDismiss?: (reason: "outside" | "escape") => void;
   harnesses: HarnessId[];
   tab: ModelPickerTab;
   models: AgentModel[];
@@ -1168,14 +1198,37 @@ function ModelFlyout({
   return (
     <Popover
       anchor={anchor}
-      side="right"
-      gap={SUBMENU_OVERLAP}
+      side={side}
+      gap={side === "right" ? SUBMENU_OVERLAP : undefined}
       width={MODEL_MENU_WIDTH}
       minHeight={MODEL_MENU_FRAME_HEIGHT}
       maxHeight={MODEL_MENU_FRAME_HEIGHT}
       layer={LAYER.submenu}
       role="dialog"
       aria-label="Models"
+      onDismiss={onDismiss}
+      onKeyDown={(event) => {
+        // Keyboard nav once focus leaves the search field (which stops its
+        // own keys). Scoped to the list so provider tabs keep their buttons.
+        if (
+          !(event.target instanceof Element) ||
+          !event.target.closest('[role="listbox"]')
+        ) {
+          return;
+        }
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          const direction = event.key === "ArrowDown" ? 1 : -1;
+          onActive(
+            Math.min(models.length - 1, Math.max(0, active + direction)),
+          );
+          return;
+        }
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        const item = models[active];
+        if (item) onPick(item);
+      }}
       data-model-picker
       style={{
         height: MODEL_MENU_HEIGHT,
@@ -1222,6 +1275,7 @@ function ModelFlyout({
             value={query}
             placeholder="Search models"
             aria-label="Search models"
+            autoFocus={autoFocusSearch}
             className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content/40"
             onChange={(event) => onQuery(event.target.value)}
             onKeyDown={onSearchKey}
